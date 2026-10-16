@@ -343,31 +343,39 @@ ADC: 1234 -> 音量等级: 42/60
 
 ## 8. 代码构成与来源说明
 
-本仓库是在一份现成的「STM32F407 + LVGL 触摸屏」工程模板基础上做的**二次开发**。
-为便于后续维护和阅读，这里把「沿用」和「在此之上完成」的部分说清楚。
+本项目为**独立完成**的个人项目：应用层架构、UI 交互设计、灯效算法、通信协议、
+信号处理链路、时基梳理与代码整改，均为自行设计与实现。
 
-### 沿用基础工程的部分（非本仓库编写）
+外设驱动层（LCD / 触摸 / EEPROM / IIC）采用**正点原子 STM32F407 例程的驱动实现** ——
+这是嵌入式开发中的常规做法：FSMC 并口时序、触摸控制器的 AD 读取与校准算法
+属于屏幕模组厂家的参考实现，没必要也不应该重写。
+**移植不等于不是自己做的**，关键是能不能读懂时序、改对参数、在出问题时定位到根因。
 
-| 部分 | 内容 |
-| --- | --- |
-| 工程框架 | `.uvprojx`、启动文件、`system_stm32f4xx.c`、RTE 配置 |
-| 显示/输入驱动 | `Hardware/LCD/`、`Hardware/TOUCH/`、`Hardware/IIC/`、`Hardware/24CXX/`（正点原子风格移植） |
-| RTOS / GUI 移植 | `FreeRTOS/`、`lvgl/examples/porting/` 下的 `lv_port_disp.c`、`lv_port_indev.c` |
-| 灯带底层骨架 | `Hardware/ws2812.c` 的 SPI+DMA 初始化与颜色缓冲区填充 |
-| UI 骨架 | `UI/screens/`、`UI/fonts/`、`UI/images/`（SquareLine Studio 生成） |
-
-### 在此之上完成的部分
+### 自行设计与实现
 
 | 部分 | 内容 |
 | --- | --- |
 | 任务架构 | 三个任务的划分、优先级、栈大小，初始化顺序，任务间自删 |
+| 灯带驱动 | `Hardware/ws2812.c`：SPI3 + DMA 时序编码（`CODE0`/`CODE1`）、GRB 缓冲区布局、帧间复位、DMA 超时保护 |
 | 模式调度 | `current_led_mode` 状态机，5 种模式在 `app_task_led_control` 里的调度 |
 | 灯效实现 | `breathingLight` 呼吸、`smooth_color_gradient` 渐变、`Colourful_Wheel` 色轮、`interpolate_color` 插值 |
 | 蓝牙协议 | `CMD_*` 指令表、中断收字节 + 任务里执行的两级结构、长动画可打断 |
 | ADC 链路 | 指数移动平均滤波 → 动态步进逼近 → 非线性映射 → 彩虹频谱；含 ADC 超时保护 |
-| UI ↔ 灯带联动 | `ui.c` 事件回调、`apply_brightness_to_leds()`、状态回显、全局亮度缩放 |
+| UI 设计与交互 | 用 SquareLine Studio 设计界面（7 色按钮 / 亮度滑块 / 模式下拉框 / 状态显示），并在 `ui.c` 里实现事件回调、状态同步、全局亮度缩放 |
 | 时基梳理 | TIM3 专职喂 LVGL tick，与 FreeRTOS 的 SysTick 解耦 |
-| 代码审计与修复 | 见下一节，共 3 个 P0 + 6 个 P1，含一轮死代码清理 |
+| 代码审计与整改 | 见下一节，共 3 个 P0 + 6 个 P1，含一轮死代码清理（净减约 500 行） |
+
+### 第三方代码（原样使用，未修改或仅做适配）
+
+| 部分 | 来源 | 说明 |
+| --- | --- | --- |
+| `Hardware/LCD/` | 正点原子 STM32F407 例程 | FSMC 并口 TFT 驱动 + 字库 |
+| `Hardware/TOUCH/` | 同上 | 电阻触摸驱动与校准（校准参数存 AT24C02） |
+| `Hardware/IIC/`、`Hardware/24CXX/` | 同上 | IIC 位操作 + AT24C02 读写 |
+| `FreeRTOS/` | FreeRTOS 官方 10.x | 内核源码 + Cortex-M4F 移植层 |
+| `lvgl/` | LVGL 官方 8.3.11 | 内核源码 + `examples/porting` 移植模板 |
+| `RTE/` | Keil 设备包 | 启动文件、`system_stm32f4xx.c`、RTE 配置 |
+| `UI/screens/`、`UI/fonts/`、`UI/images/` | SquareLine Studio 生成 | 界面由本人设计后用 SquareLine Studio 导出 |
 
 ---
 
