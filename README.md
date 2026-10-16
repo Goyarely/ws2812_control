@@ -490,10 +490,36 @@ ARMCC 下这是 **#223-D 隐式声明**告警 —— 返回值被当作 `int` �
 - **`Hardware/key.c` 只有 `key_init()`**，没有任何按键读取函数，按键功能未实现
 - **没有做单元测试 / 静态分析工具接入**（工程本身没有测试框架）
 
+#### ⚠️ 未修复：`pixelBuffer` 存在跨任务竞争
+
+`app_task_lvgl`（优先级 7）和 `app_task_led_control`（优先级 4）**都会**写 `pixelBuffer`
+并调用 `rgb_SendArray()`：
+
+| 路径 | 触发方式 |
+| --- | --- |
+| `app_task_lvgl` → `lv_task_handler()` → `ui_event_btnRed` → `RGB_SetAll()` | 用户点触摸屏 |
+| `app_task_led_control` → 模式 4 → `LM_to_WS()` / `RGB_SetAll()` | 每 5ms 轮询 |
+
+FreeRTOS 开了抢占（`configUSE_PREEMPTION = 1`），优先级 7 的 LVGL 任务可以在
+灯效任务写缓冲区的**任意位置**打断它。可能出现的现象：
+
+1. 一帧里混进两种效果的颜色（下一帧自愈，表现为偶发闪一下）
+2. 更糟的情况：灯效任务在 `rgb_SendArray()` 里刚执行完 `DMA_Cmd(DISABLE)` 就被打断，
+   此时 DMA 处于关闭状态，`TCIF5` 标志永远不会置位 —— 下一次调用要等满 50ms 超时才返回，
+   表现为**偶发 50ms 卡顿**
+
+目前没有修，原因有二：一是需要新增互斥锁并确认 `rgb_SendArray()` 的临界区边界，
+属于功能性改动；二是本机没有 ARM 工具链，改完无法编译验证，不宜盲改。
+
+**正确做法**（待上板验证后实施）：用 `xSemaphoreCreateMutex()` 建一把灯带互斥锁，
+在 `rgb_SetColor` + `rgb_SendArray` 的组合外面加锁；或者更彻底一点，
+让 `pixelBuffer` 只由灯效任务写，UI 事件通过队列把「要什么颜色」传过去，从根上消除共享。
+
 ### 后续计划
 
 - [ ] Keil 里 Rebuild，消除剩余告警，硬件复测
 - [ ] 补充演示照片与视频（`doc/` 目录）
+- [ ] **给 `pixelBuffer` 加互斥保护**（见上文「未修复：`pixelBuffer` 存在跨任务竞争」）
 - [ ] 合并 `Hardware/sys.h` 与 `System/sys/sys.h`
 - [ ] 灯珠数、颜色通道顺序改成编译期可配置，支持不同长度的灯带
 - [ ] 蓝牙指令加上参数（如 `B128` 设置亮度），从单字符扩展成简单协议
