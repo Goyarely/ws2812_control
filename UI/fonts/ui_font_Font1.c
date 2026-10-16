@@ -1,7 +1,7 @@
 /*******************************************************************************
  * Size: 16 px
  * Bpp: 1
- * Opts: --bpp 1 --size 16 --font C:/Users/goya/SquareLine/assets/STSONG.TTF -o C:/Users/goya/SquareLine/assets\ui_font_Font1.c --format lvgl -r 0x20-0x7f --symbols 呼吸灯就绪流水灯关闭火焰效果星空效果随机闪烁脉冲效果颜色追逐 --no-compress --no-prefilter
+ * Opts: --bpp 1 --size 16 --font STSONG.TTF -o ui_font_Font1.c --format lvgl -r 0x20-0x7f --symbols 呼吸灯就绪流水灯关闭火焰效果星空效果随机闪烁脉冲效果颜色追逐 --no-compress --no-prefilter
  ******************************************************************************/
 
 #include "../ui.h"
