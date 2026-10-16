@@ -13,17 +13,25 @@ typedef struct
   u8 B;
 } RGBColor_TypeDef;
 
-// 只使用宏定义，移除重复的const定义
-#define RED ((RGBColor_TypeDef){255, 0, 0})
-#define ORANGE ((RGBColor_TypeDef){127, 106, 0})
-#define YELLOW ((RGBColor_TypeDef){255, 255, 0})
-#define GREEN ((RGBColor_TypeDef){0, 255, 0})
-#define BLUE ((RGBColor_TypeDef){0, 0, 255})
-#define SKY ((RGBColor_TypeDef){0, 255, 255})
-#define PURPLE ((RGBColor_TypeDef){65, 105, 225})
-#define MAGENTA ((RGBColor_TypeDef){255, 0, 255})
-#define BLACK ((RGBColor_TypeDef){0, 0, 0})
-#define WHITE ((RGBColor_TypeDef){255, 255, 255})
+/* 颜色常量：统一使用 WS_ 前缀。
+ *
+ * 为什么不叫 RED / GREEN / BLUE：
+ * Hardware/LCD/lcd.h 里已经有一组同名宏，但它们是 RGB565 的 16 位数值
+ * （RED = 0xF800，用于 LCD 绘图），和这里的 RGB 结构体语义完全不同。
+ * C 预处理器对同名宏是"后定义覆盖先定义"，不加前缀时谁生效取决于
+ * include 顺序，同一份代码在不同文件里含义可能不同。
+ * 加前缀后两组宏彻底隔离，可以放心在同一个文件里同时使用。
+ */
+#define WS_RED      ((RGBColor_TypeDef){255, 0, 0})
+#define WS_ORANGE   ((RGBColor_TypeDef){127, 106, 0})
+#define WS_YELLOW   ((RGBColor_TypeDef){255, 255, 0})
+#define WS_GREEN    ((RGBColor_TypeDef){0, 255, 0})
+#define WS_BLUE     ((RGBColor_TypeDef){0, 0, 255})
+#define WS_SKY      ((RGBColor_TypeDef){0, 255, 255})
+#define WS_PURPLE   ((RGBColor_TypeDef){65, 105, 225})
+#define WS_MAGENTA  ((RGBColor_TypeDef){255, 0, 255})
+#define WS_BLACK    ((RGBColor_TypeDef){0, 0, 0})
+#define WS_WHITE    ((RGBColor_TypeDef){255, 255, 255})
 
 /* Exported constants --------------------------------------------------------*/
 #define Pixel_S1_NUM 60 // 灯珠 RGB数量
@@ -48,14 +56,11 @@ void rgb_SetColor(u16 LedId, RGBColor_TypeDef Color);
 void rgb_SendArray(void);
 
 void RGB_SetAll(u16 Pixel_LEN, RGBColor_TypeDef color);
+
 /* Complicated Color Effects -------------------------------------------------*/
-void rainbowCycle(u16 Pixel_LEN);
 void breathingLight(u16 LedIdStart, u16 LedIdEnd, RGBColor_TypeDef color);
 RGBColor_TypeDef Colourful_Wheel(u8 WheelPos);
 void smooth_color_gradient(u16 Pixel_LEN, uint16_t duration_ms);
-void color_gradient_cycle(u16 Pixel_LEN, uint16_t duration_ms);
-void pulseEffect(u16 Pixel_LEN, RGBColor_TypeDef color, uint16_t speed);
-// 添加缺失的 interpolate_color 函数声明
 RGBColor_TypeDef interpolate_color(RGBColor_TypeDef start_color, RGBColor_TypeDef end_color, float ratio);
 
 #endif /* __WS2812_H */

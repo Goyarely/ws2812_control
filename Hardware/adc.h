@@ -1,32 +1,28 @@
 #ifndef __ADC_H
 #define __ADC_H
 
+/* 灯珠数量统一由 ws2812.h 的 Pixel_S1_NUM 定义，避免两处硬编码不一致 */
 #include "stm32f4xx.h"
 #include "sys.h"
+#include "ws2812.h"
 
+#define LED_NUM Pixel_S1_NUM   // LED总数（= 灯带实际灯珠数）
+#define MAX_ADC 4095           // ADC最大值（12 位满量程）
 
-#define LED_NUM 60  // LED总数
-#define MAX_ADC 4095 // ADC最大值
-
-
-#define SMOOTHING_FACTOR 0.3f  // 提高平滑系数，保持一定平滑度但增加响应速度
-#define FADE_SPEED 5          // 增加渐变速度
+#define SMOOTHING_FACTOR 0.3f  // 指数移动平均系数：越大响应越快、越不平滑
 
 void Adc_PA3_Init(void);
 u16 Get_PA3_Adc_Value(void);
 
-extern uint16_t smoothedADCValue;
 extern uint16_t displayedLEDCount;
 
-//平滑函数，对小变化更敏感
+/* 指数移动平均滤波：对小变化更敏感，且内存开销恒定（无需缓存数组） */
 uint16_t smoothADCValue(uint16_t newValue);
-// 动态渐变速度
+/* 逐帧逼近目标值，差异越大步进越快，避免亮度跳变 */
 uint16_t fadeToTargetLEDCount(uint16_t target, uint16_t current);
-// 将ADC值映射到指定范围
-uint16_t map(uint16_t x, uint16_t in_min, uint16_t in_max, uint16_t out_min, uint16_t out_max);
-// 映射函数：将ADC值映射到LED数量
+/* 把 ADC 读数映射为要点亮的灯珠数量 */
 uint16_t mapADCToLEDCount(uint16_t adcValue, uint16_t maxLEDs);
-//声音控制ws2818b
+/* 音量驱动灯效：按当前 ADC 值点亮对应数量的灯珠，带彩虹流动 */
 void LM_to_WS(void);
 
 #endif

@@ -12,7 +12,6 @@ extern "C" {
 
 #include "lvgl.h"
 #include "ui_helpers.h"
-#include "ui_events.h"
 
 // 添加WS2812控制相关声明
 #include "ws2812.h"

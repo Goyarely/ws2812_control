@@ -15,6 +15,8 @@
 #include "ws2812.h"
 #include "key.h"
 #include "adc.h"
+#include <math.h>    /* powf()：音量到灯珠数的非线性映射 */
+#include <stdlib.h>  /* abs()  */
 
 // 蓝牙指令定义
 #define CMD_RED    'R'    // 红色
@@ -32,31 +34,25 @@
 // 音量控制相关定义
 #define VOLUME_MIN 100     // 最小音量AD值
 #define VOLUME_MAX 3000  // 最大音量AD值
-#define SAMPLE_COUNT 5     // 采样次数(滤波)
-#define SAMPLE_INTERVAL 50 // 采样间隔(ms)
 #define SENSITIVITY_BOOST 1.2f  // 灵敏度增强系数
-RGBColor_TypeDef current_color = {255, 0, 0};  // 默认红色
+
 // 任务句柄
 TaskHandle_t app_task_init_handle = NULL;
 TaskHandle_t app_task_lvgl_handle = NULL;
 TaskHandle_t app_task_led_control_handle = NULL;
-TaskHandle_t xModeMutexHandle = NULL;  // 模式切换互斥锁
 
 // 全局变量
 volatile char bt_cmd = 0;         // 蓝牙指令接收变量
-uint8_t current_mode = 0;         // 0:蓝牙控制模式 1:音量控制模式
 
 // 函数声明
 static void app_task_init(void *pvParameters);
 static void app_task_lvgl(void *pvParameters);
 static void app_task_led_control(void *pvParameters);
-void tim3_init(void);
 void timer_cb(struct _lv_timer_t *id);
 
 // 蓝牙相关函数
 void USART3_IRQHandler(void);
 void execute_bt_command(char cmd);
-RGBColor_TypeDef getVolumeColor(u8 volumeLevel);
 
 int main()
 {
@@ -124,8 +120,8 @@ static void app_task_init(void *pvParameters)
     lv_port_indev_init();
     printf("输入设备初始化完成\r\n");
 
-    // 7. 定时器3初始化
-    tim3_init();
+    // 7. 定时器3初始化（为 LVGL 提供 1ms 节拍，实现见 Hardware/tim.c）
+    Tim3_Init();
     printf("定时器初始化完成\r\n");
     
     // 8. 界面初始化
@@ -173,7 +169,6 @@ static void app_task_lvgl(void *pvParameters)
 static void app_task_led_control(void *pvParameters)
 {
     u16 adc_value = 0;
-    u16 adc_avg = 0;
     u8 volume_level = 0;
     u8 i, j;
     static uint32_t effect_counter = 0;
@@ -198,7 +193,7 @@ static void app_task_led_control(void *pvParameters)
             case 1: // 呼吸模式
                 if(effect_counter % 40 == 0) { // 每200ms更新
                     static uint8_t breath_color_idx = 0;
-                    RGBColor_TypeDef breath_colors[] = {RED, ORANGE, YELLOW, GREEN, SKY, BLUE, PURPLE};
+                    RGBColor_TypeDef breath_colors[] = {WS_RED, WS_ORANGE, WS_YELLOW, WS_GREEN, WS_SKY, WS_BLUE, WS_PURPLE};
                     breathingLight(0, Pixel_S1_NUM-1, breath_colors[breath_color_idx]);
                     breath_color_idx = (breath_color_idx + 1) % 7;
                 }
@@ -314,16 +309,6 @@ static void app_task_led_control(void *pvParameters)
         vTaskDelay(pdMS_TO_TICKS(5)); // 保持5ms基本延时
     }
 }
-// 音量对应的颜色计算
-RGBColor_TypeDef getVolumeColor(u8 volumeLevel) {
-    RGBColor_TypeDef color;
-    u8 ratio = (volumeLevel * 255) / 60; // 0-60映射到0-255
-    color.G = 255 - ratio;  // 绿色随音量增大减弱
-    color.R = ratio;        // 红色随音量增大增强
-    color.B = 0;            // 蓝色关闭
-    return color;
-}
-
 // USART3(蓝牙)中断服务函数
 void USART3_IRQHandler(void) {
     if(USART_GetITStatus(USART3, USART_IT_RXNE) == SET) {
@@ -334,8 +319,6 @@ void USART3_IRQHandler(void) {
 
 // 执行蓝牙指令
 void execute_bt_command(char cmd) {
-    current_mode = 0; // 进入蓝牙控制模式
-    
     // 创建颜色变量用于函数调用
     RGBColor_TypeDef color_red = {255, 0, 0};
     RGBColor_TypeDef color_orange = {127, 106, 0};
@@ -404,7 +387,6 @@ void execute_bt_command(char cmd) {
             printf("关闭所有灯\r\n");
             break;
         case CMD_VOLUME:
-            current_mode = 1; // 切换到音量控制模式
             printf("切换到音量控制模式\r\n");
             break;
         default:
@@ -438,47 +420,5 @@ void vApplicationTickHook(void)
     // 系统时钟节拍钩子函数
 }
 
-// TIM3初始化函数
-void tim3_init()
-{
-    TIM_TimeBaseInitTypeDef TIM_TimeBaseInitStruct = {0};
-    NVIC_InitTypeDef        NVIC_InitStruct = {0};
-    
-    //TIM3的时钟使能
-    RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM3, ENABLE);    
-
-    //初始化基本定时器的功能
-    TIM_TimeBaseInitStruct.TIM_Prescaler        = 8400-1;    //预分配值, 定时器的时钟频率=APB1总线*2= 42MHz*2=84MHz 预分频值=8400， 定时器的计数频率=定时器时钟频率/预分频值=84MHz/8400=10000hz
-    TIM_TimeBaseInitStruct.TIM_CounterMode        = TIM_CounterMode_Up;    //向上计数模式    
-    TIM_TimeBaseInitStruct.TIM_Period            = 10-1;    //定时器的计数值
-                                                            //时间=计数值个数*(1/频率) = 10*(1/10000) = 1ms
-    TIM_TimeBaseInit(TIM3, &TIM_TimeBaseInitStruct);
-
-    //定时器中断优先级配置
-    NVIC_InitStruct.NVIC_IRQChannel                        =    TIM3_IRQn;    //TIM3中断通道
-    NVIC_InitStruct.NVIC_IRQChannelPreemptionPriority    =   5;                //抢占优先级（调整为中等优先级）
-    NVIC_InitStruct.NVIC_IRQChannelSubPriority            =   0;                //响应优先级
-    NVIC_InitStruct.NVIC_IRQChannelCmd                    =   ENABLE;            //使能中断通道
-    NVIC_Init(&NVIC_InitStruct);
-    
-    
-    //启动定时器的定时完成中断(更新中断)
-    TIM_ITConfig(TIM3, TIM_IT_Update, ENABLE);
-
-    //使能定时器的工作
-    TIM_Cmd(TIM3, ENABLE);    
-    
-}
-
-//定时器3的更新中断服务函数
-void TIM3_IRQHandler(void)
-{
-    //检查定时器是否定时完成
-    if(TIM_GetITStatus(TIM3, TIM_IT_Update) == SET)
-    {
-        lv_tick_inc(1);        //提供给lvgl-1ms的时间
-        
-        //清空定时器的定时完成标志位
-        TIM_ClearITPendingBit(TIM3, TIM_IT_Update);
-    }
-}
+/* TIM3 的初始化与更新中断服务函数已移至驱动层 Hardware/tim.c，
+   main.c 只负责在 app_task_init 里调用 Tim3_Init()。 */

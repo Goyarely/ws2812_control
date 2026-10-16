@@ -1,13 +1,21 @@
 #include "ws2812.h"
 #include "ui.h"
+#include <FreeRTOS.h>   /* rgb_SendArray() 需要 vTaskDelay 让出 CPU */
+#include <task.h>
+
 // 呼吸灯相关参数
-#define BREATHING_STEPS 200   // 呼吸步数，越大越平滑 200*10=2000ms
-#define BREATHING_DELAY_MS 2 // 每步延迟时间（毫秒）
+#define BREATHING_STEPS 200   // 呼吸步数，越大越平滑
+#define BREATHING_DELAY_MS 2  // 每步延迟时间（毫秒）
 #define PIXEL_MAX_NUM         128    // 最大LED数量（防止越界）
 
+/* 等待上一帧 DMA 发送完成的超时时间（ms）。
+   一帧 60 灯在 5.25Mbps 下约需 2.2ms，正常情况 3~5 个 tick 内必定完成；
+   这里给 50ms 余量，超过就认为 DMA 异常，放弃本帧。 */
+#define WS2812_DMA_TIMEOUT_MS 50
 
 
-//  每个LED需要24个字节表示颜色数据
+
+//  每个LED需要24个字节表示颜色数据（字节序 GRB，与 WS2812B 一致）
 static u8 pixelBuffer[Pixel_S1_NUM][24];
 
 /***********************************************************************************************
@@ -17,9 +25,9 @@ static u8 pixelBuffer[Pixel_S1_NUM][24];
 ************************************************************************************************/
 /*****************************************
  说明：
- SPI2：
- 引脚：使用的是PB15引脚，在TFTLCD下的LCD BL
- 时钟：根据总线图，SPI2由APB1(42MHz)分频而来
+ SPI3：
+ 引脚：PB5（SPI3_SCK），经 GPIO_AF_SPI3 复用输出
+ 时钟：SPI3 挂载在 APB1(42MHz)，8 分频 -> 5.25MHz
  ****************************************/
 void WS2812b_Configuration(void)
 {
@@ -29,22 +37,22 @@ void WS2812b_Configuration(void)
   DMA_InitTypeDef DMA_InitStructure;
 
   RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOB, ENABLE); // 使能GPIOB时钟
-  RCC_APB1PeriphClockCmd(RCC_APB1Periph_SPI3, ENABLE);  // 使能SPI2时钟
+  RCC_APB1PeriphClockCmd(RCC_APB1Periph_SPI3, ENABLE);  // 使能SPI3时钟
   RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_DMA1, ENABLE);  // DMA1时钟使能
 
-  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_5;         // PB15复用功能输出
+  GPIO_InitStructure.GPIO_Pin = GPIO_Pin_5;         // PB5 复用功能输出
   GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;       // 复用功能
   GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;     // 推挽输出
   GPIO_InitStructure.GPIO_Speed = GPIO_Speed_100MHz; // 100MHz
   GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;       // 上拉
   GPIO_Init(GPIOB, &GPIO_InitStructure);             // 初始化
 
-  GPIO_PinAFConfig(GPIOB, GPIO_PinSource5, GPIO_AF_SPI3); // PB15复用为 SPI2
+  GPIO_PinAFConfig(GPIOB, GPIO_PinSource5, GPIO_AF_SPI3); // PB5 复用为 SPI3
 
   SPI_InitStructure.SPI_Direction = SPI_Direction_2Lines_FullDuplex; // 设置SPI单向或者双向的数据模式:SPI设置为双线双向全双工
   SPI_InitStructure.SPI_Mode = SPI_Mode_Master;                      // 设置SPI工作模式:设置为主SPI
   SPI_InitStructure.SPI_DataSize = SPI_DataSize_8b;                  // 设置SPI的数据大小:SPI发送接收8位帧结构
-  SPI_InitStructure.SPI_CPOL = SPI_CPOL_Low;                         // 串行同步时钟的空闲状态为高电平
+  SPI_InitStructure.SPI_CPOL = SPI_CPOL_Low;                         // 串行同步时钟的空闲状态为低电平
   SPI_InitStructure.SPI_CPHA = SPI_CPHA_2Edge;                       // 串行同步时钟的第二个跳变沿（上升或下降）数据被采样
   SPI_InitStructure.SPI_NSS = SPI_NSS_Soft;                          // NSS信号由硬件（NSS管脚）还是软件（使用SSI位）管理:内部NSS信号有SSI位控制
   SPI_InitStructure.SPI_BaudRatePrescaler = SPI_BaudRatePrescaler_8; // 42M/8=5.25M
@@ -77,7 +85,7 @@ void WS2812b_Configuration(void)
   DMA_InitStructure.DMA_PeripheralBurst = DMA_PeripheralBurst_Single; // 外设突发单次传输
   DMA_Init(DMA1_Stream5, &DMA_InitStructure);                         // 初始化DMA Stream
 
-  SPI_I2S_DMACmd(SPI3, SPI_I2S_DMAReq_Tx, ENABLE); // 使能SPI2的DMA发送
+  SPI_I2S_DMACmd(SPI3, SPI_I2S_DMAReq_Tx, ENABLE); // 使能SPI3的DMA发送
   DMA_Cmd(DMA1_Stream5, DISABLE);                  // 关闭DMA传输
   while (DMA_GetCmdStatus(DMA1_Stream5) != DISABLE)
   {
@@ -102,7 +110,9 @@ void rgb_SetColor(u16 LedId, RGBColor_TypeDef Color)
 
   u16 i;
 
-  if (LedId > (Pixel_S1_NUM))
+  /* 注意是 >= ：pixelBuffer 的合法下标是 0 ~ Pixel_S1_NUM-1，
+     写成 > 会让 LedId == Pixel_S1_NUM 通过检查，造成数组越界写。 */
+  if (LedId >= Pixel_S1_NUM)
   {
     printf("Error:Out of Range!\r\n");
     return; // to avoid overflow
@@ -130,25 +140,46 @@ void rgb_SetColor(u16 LedId, RGBColor_TypeDef Color)
 
 /***********************************************************************************************
 **     name: rgb_SendArray
-** function: Configure colors to RGB pixel series.
-             RGBColor_TypeDef: pointer to a RGBColor_TypeDef structure that contains the color configuration information for the RGB pixel.
+** function: 把 pixelBuffer 里已填好的颜色数据通过 SPI+DMA 发送到灯带
 **parameter: void
 **   return: void
+**
+**   一帧数据 = Pixel_S1_NUM × 24 字节，在 SPI3 (5.25Mbps) 下约需 2.2ms。
+**
+**   本函数会先等待上一帧发送完成再启动下一帧，因此：
+**     - 不会覆盖正在发送的缓冲区（原实现是"没发完就丢弃本帧"，会静默丢帧）
+**     - 等待期间用 vTaskDelay(1) 让出 CPU，不独占 tick
+**     - 发送前插入 WS2812 要求的复位低电平，保证帧间正确分隔
+**
+**   只能在任务上下文调用，不可用于中断服务函数（内部会调用 vTaskDelay）。
 ************************************************************************************************/
 void rgb_SendArray(void)
 {
+  uint32_t timeout = WS2812_DMA_TIMEOUT_MS;
 
-  if (DMA_GetFlagStatus(DMA1_Stream5, DMA_FLAG_TCIF5) != RESET)
-  {                                                  // 等待DMA1_Steam4传输完成
-    DMA_ClearFlag(DMA1_Stream5, DMA_FLAG_TCIF5);     // 清除DMA1_Steam4传输完成标志，先预想DMA_FLAG_TCIF0的零，代表的是通道0
-    SPI_I2S_DMACmd(SPI3, SPI_I2S_DMAReq_Tx, ENABLE); // 使能SPI2的DMA发送
-    DMA_Cmd(DMA1_Stream5, DISABLE);                  // 关闭DMA传输
-    while (DMA_GetCmdStatus(DMA1_Stream5) != DISABLE)
+  /* 等待上一帧传输完成；超时说明 DMA 异常，直接放弃本帧而不是覆盖缓冲区 */
+  while (DMA_GetFlagStatus(DMA1_Stream5, DMA_FLAG_TCIF5) == RESET)
+  {
+    if (timeout-- == 0)
     {
-    } // 确保DMA可以被设置
-    DMA_SetCurrDataCounter(DMA1_Stream5, Pixel_S1_NUM * 24); // 数据传输量
-    DMA_Cmd(DMA1_Stream5, ENABLE);                           // 开启DMA传输
+      return;
+    }
+    vTaskDelay(1);
   }
+
+  /* WS2812 靠数据线持续低电平（>280us）来判定一帧结束。
+     SPI 空闲时 CPOL_Low 输出低电平，所以这里只需保证足够长的空闲时间。
+     若省略这一步，连续调用本函数时帧间隔会缩短到几百 ns，灯带会显示错乱。 */
+  delay_us(300);
+
+  DMA_ClearFlag(DMA1_Stream5, DMA_FLAG_TCIF5);     // 清除传输完成标志
+  SPI_I2S_DMACmd(SPI3, SPI_I2S_DMAReq_Tx, ENABLE); // 使能 SPI3 的 DMA 发送请求
+  DMA_Cmd(DMA1_Stream5, DISABLE);                  // 关闭 DMA 以便重新装载
+  while (DMA_GetCmdStatus(DMA1_Stream5) != DISABLE)
+  {
+  } // 确保 DMA 可以被设置
+  DMA_SetCurrDataCounter(DMA1_Stream5, Pixel_S1_NUM * 24); // 数据传输量
+  DMA_Cmd(DMA1_Stream5, ENABLE);                           // 开启 DMA 传输
 }
 
 /***********************************************************************************************
@@ -162,7 +193,7 @@ void RGB_RED(u16 Pixel_LEN)
   u16 i;
   for (i = 0; i < Pixel_LEN; i++)
   {
-    rgb_SetColor(i, RED);  // 使用宏定义
+    rgb_SetColor(i, WS_RED);  // 使用宏定义
   }
   rgb_SendArray();
 }
@@ -172,7 +203,7 @@ void RGB_PURPLE(u16 Pixel_LEN)
   u16 i;
   for (i = 0; i < Pixel_LEN; i++)
   {
-    rgb_SetColor(i, PURPLE);  // 使用宏定义
+    rgb_SetColor(i, WS_PURPLE);  // 使用宏定义
   }
   rgb_SendArray();
 }
@@ -182,7 +213,7 @@ void RGB_SKY(u16 Pixel_LEN)
   u16 i;
   for (i = 0; i < Pixel_LEN; i++)
   {
-    rgb_SetColor(i, SKY);  // 使用宏定义
+    rgb_SetColor(i, WS_SKY);  // 使用宏定义
   }
   rgb_SendArray();
 }
@@ -192,7 +223,7 @@ void RGB_MAGENTA(u16 Pixel_LEN)
   u16 i;
   for (i = 0; i < Pixel_LEN; i++)
   {
-    rgb_SetColor(i, MAGENTA);  // 使用宏定义
+    rgb_SetColor(i, WS_MAGENTA);  // 使用宏定义
   }
   rgb_SendArray();
 }
@@ -202,7 +233,7 @@ void RGB_ORANGE(u16 Pixel_LEN)
   u16 i;
   for (i = 0; i < Pixel_LEN; i++)
   {
-    rgb_SetColor(i, ORANGE);  // 使用宏定义
+    rgb_SetColor(i, WS_ORANGE);  // 使用宏定义
   }
   rgb_SendArray();
 }
@@ -212,7 +243,7 @@ void RGB_GREEN(u16 Pixel_LEN)
   u16 i;
   for (i = 0; i < Pixel_LEN; i++)
   {
-    rgb_SetColor(i, GREEN);  // 使用宏定义
+    rgb_SetColor(i, WS_GREEN);  // 使用宏定义
   }
   rgb_SendArray();
 }
@@ -222,7 +253,7 @@ void RGB_BLUE(u16 Pixel_LEN)
   u16 i;
   for (i = 0; i < Pixel_LEN; i++)
   {
-    rgb_SetColor(i, BLUE);  // 使用宏定义
+    rgb_SetColor(i, WS_BLUE);  // 使用宏定义
   }
   rgb_SendArray();
 }
@@ -232,7 +263,7 @@ void RGB_YELLOW(u16 Pixel_LEN)
   u16 i;
   for (i = 0; i < Pixel_LEN; i++)
   {
-    rgb_SetColor(i, YELLOW);  // 使用宏定义
+    rgb_SetColor(i, WS_YELLOW);  // 使用宏定义
   }
   rgb_SendArray();
 }
@@ -242,7 +273,7 @@ void RGB_BLACK(u16 Pixel_LEN)
   u16 i;
   for (i = 0; i < Pixel_LEN; i++)
   {
-    rgb_SetColor(i, BLACK);  // 使用宏定义
+    rgb_SetColor(i, WS_BLACK);  // 使用宏定义
   }
   rgb_SendArray();
 }
@@ -252,7 +283,7 @@ void RGB_WHITE(u16 Pixel_LEN)
   u16 i;
   for (i = 0; i < Pixel_LEN; i++)
   {
-    rgb_SetColor(i, WHITE);  // 使用宏定义
+    rgb_SetColor(i, WS_WHITE);  // 使用宏定义
   }
   rgb_SendArray();
 }
@@ -309,28 +340,6 @@ RGBColor_TypeDef Colourful_Wheel(uint8_t WheelPos)
     }
 
     return color;
-}
-
-/***********************************************************************************************
-**     name: rainbowCycle
-** function: 彩虹循环（所有LED同步渐变彩虹色）
-** parameter: Pixel_LEN - LED数量
-** return: void
-************************************************************************************************/
-void rainbowCycle(uint16_t Pixel_LEN)
-{
-    if (Pixel_LEN == 0 || Pixel_LEN > PIXEL_MAX_NUM) return;
-
-    uint16_t i, j;
-    for (j = 0; j < 1023; j++)  // 20s完成一次全循环
-    {
-        for (i = 0; i < Pixel_LEN; i++)
-        {
-            rgb_SetColor(i, Colourful_Wheel(((i * 256 / Pixel_LEN) + j) & 255));
-        }
-        rgb_SendArray();
-        delay_ms(20);
-    }
 }
 
 /***********************************************************************************************
@@ -393,35 +402,6 @@ RGBColor_TypeDef interpolate_color(RGBColor_TypeDef start_color, RGBColor_TypeDe
 }
 
 /***********************************************************************************************
-**     name: color_gradient_cycle
-** function: 全局同色渐变（所有LED同步切换颜色）
-** parameter: Pixel_LEN - LED数量，duration_ms - 两色过渡时长（ms）
-** return: void
-************************************************************************************************/
-void color_gradient_cycle(uint16_t Pixel_LEN, uint16_t duration_ms)
-{
-    if (Pixel_LEN == 0 || Pixel_LEN > PIXEL_MAX_NUM || duration_ms == 0) return;
-
-    static uint32_t cnt = 0;
-    static uint8_t color_idx = 0;
-    RGBColor_TypeDef colors[] = {RED, ORANGE, YELLOW, GREEN, SKY, BLUE, PURPLE, WHITE};
-    uint8_t color_cnt = sizeof(colors)/sizeof(colors[0]);
-
-    // 取当前起始色和目标色
-    RGBColor_TypeDef start = colors[color_idx];
-    RGBColor_TypeDef end = colors[(color_idx + 1) % color_cnt];
-    float ratio = (float)(cnt % duration_ms) / duration_ms;
-
-    // 生成过渡色并刷新
-    RGBColor_TypeDef grad = interpolate_color(start, end, ratio);
-    RGB_SetAll(Pixel_LEN, grad);
-    rgb_SendArray();
-
-    cnt++;
-    if (cnt % duration_ms == 0) color_idx = (color_idx + 1) % color_cnt;
-}
-
-/***********************************************************************************************
 **     name: smooth_color_gradient
 ** function: 流水渐变（LED按位置渐变不同颜色，模拟液体流动）
 ** parameter: Pixel_LEN - LED数量，duration_ms - 渐变周期（ms）
@@ -432,7 +412,7 @@ void smooth_color_gradient(uint16_t Pixel_LEN, uint16_t duration_ms)
     if (Pixel_LEN == 0 || Pixel_LEN > PIXEL_MAX_NUM || duration_ms == 0) return;
 
     static uint32_t cnt = 0;
-    RGBColor_TypeDef colors[] = {RED, ORANGE, YELLOW, GREEN, SKY, BLUE, PURPLE};
+    RGBColor_TypeDef colors[] = {WS_RED, WS_ORANGE, WS_YELLOW, WS_GREEN, WS_SKY, WS_BLUE, WS_PURPLE};
     uint8_t color_cnt = sizeof(colors)/sizeof(colors[0]);
     uint32_t total_steps = (uint32_t)duration_ms * color_cnt;
     uint32_t curr_step = cnt % total_steps;
@@ -463,33 +443,3 @@ void smooth_color_gradient(uint16_t Pixel_LEN, uint16_t duration_ms)
     cnt++;
 }
 
-/***********************************************************************************************
-**     name: pulseEffect
-** function: 全局脉冲（所有LED同色同步呼吸，区别于多色呼吸）
-** parameter: Pixel_LEN - LED数量，baseColor - 基础颜色，speed - 脉冲速度（ms）
-** return: void
-************************************************************************************************/
-void pulseEffect(uint16_t Pixel_LEN, RGBColor_TypeDef baseColor, uint16_t speed)
-{
-    if (Pixel_LEN == 0 || Pixel_LEN > PIXEL_MAX_NUM) return;
-
-    static uint8_t brightness = 0;
-    static int8_t dir = 1;  // 1=渐亮，-1=渐暗
-
-    // 更新亮度
-    brightness += dir;
-    if (brightness >= 255) { brightness = 255; dir = -1; }
-    else if (brightness <= 0) { brightness = 0; dir = 1; }
-
-    // 亮度适配颜色
-    RGBColor_TypeDef adjusted = {
-        .R = (baseColor.R * brightness)/255,
-        .G = (baseColor.G * brightness)/255,
-        .B = (baseColor.B * brightness)/255
-    };
-
-    // 刷新所有LED
-    RGB_SetAll(Pixel_LEN, adjusted);
-    rgb_SendArray();
-    delay_ms(speed);
-}

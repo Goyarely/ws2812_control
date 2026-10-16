@@ -2,7 +2,6 @@
 #include "ws2812.h"
 #include <stdlib.h> 
 
-uint16_t smoothedADCValue = 0;
 uint16_t displayedLEDCount = 0;
 
 
@@ -40,10 +39,10 @@ void Adc_PA3_Init(void)
 	ADC_CommonInit(&ADC_CommonInitStruct);
 	
 	
-	ADC_InitStruct.ADC_Resolution	= ADC_Resolution_10b;//ADC分辨率选择 4096等分
+	ADC_InitStruct.ADC_Resolution	= ADC_Resolution_12b;//ADC分辨率选择 12位 (0~4095)，与 MAX_ADC 一致
 	ADC_InitStruct.ADC_DataAlign	= ADC_DataAlign_Right; //数据右对齐
 	ADC_InitStruct.ADC_ScanConvMode = DISABLE;//不使用扫描
-	ADC_InitStruct.ADC_ContinuousConvMode 	= ENABLE; //单次转换
+	ADC_InitStruct.ADC_ContinuousConvMode 	= ENABLE; //连续转换模式（启动一次后持续转换）
 	//使用软件触发，不配置下面的参数
 	ADC_InitStruct.ADC_ExternalTrigConvEdge	=ADC_ExternalTrigConvEdge_None; 
 	ADC_InitStruct.ADC_NbrOfConversion = 1; 	//转换通道数目
@@ -53,7 +52,9 @@ void Adc_PA3_Init(void)
 	 ADC_Cmd(ADC1, ENABLE);
 	//配置规则通道参数：
 	//规则序列:1 第一个转换
-	ADC_RegularChannelConfig(ADC1, ADC_Channel_3, 1, ADC_SampleTime_3Cycles);
+	//采样时间 56 周期：音频信号源（电位器/分压网络）输出阻抗较高，
+	//采样保持电容需要更长时间充电，3 周期会导致读数偏低且跳变。
+	ADC_RegularChannelConfig(ADC1, ADC_Channel_3, 1, ADC_SampleTime_56Cycles);
 	
 
 }
@@ -119,11 +120,6 @@ uint16_t fadeToTargetLEDCount(uint16_t target, uint16_t current) {
 }
 
 
-// 将ADC值映射到指定范围
-uint16_t map(uint16_t x, uint16_t in_min, uint16_t in_max, uint16_t out_min, uint16_t out_max) {
-    return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
-}
-
 // 映射函数：将ADC值映射到LED数量
 uint16_t mapADCToLEDCount(uint16_t adcValue, uint16_t maxLEDs) {
     // 确保ADC值在有效范围内
@@ -178,14 +174,3 @@ uint16_t mapADCToLEDCount(uint16_t adcValue, uint16_t maxLEDs) {
  	rgb_SendArray();
  	delay_ms(10); // 减少延时提高响应速度
  }
- // 高灵敏度移动平均滤波
-uint16_t high_sensitivity_filter(uint16_t newValue) {
-    static uint16_t buffer[3] = {0};
-    static uint8_t index = 0;
-    
-    buffer[index] = newValue;
-    index = (index + 1) % 3;
-    
-    // 使用加权平均，最新值权重更高
-    return (buffer[0] + buffer[1] * 2 + buffer[2] * 3) / 6;
-}

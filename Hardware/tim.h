@@ -3,8 +3,7 @@
 
 #include "stm32f4xx.h"
 
-
+/* TIM3：为 LVGL 提供 1ms 系统节拍 */
 void Tim3_Init(void);
-void Tim3_NoISR_Init(u32 Period);
 
 #endif

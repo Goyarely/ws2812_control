@@ -13,7 +13,7 @@
 
 // 全局亮度变量，默认最大亮度
 uint8_t led_brightness = 255;
-uint8_t current_led_mode = 0; // 0:单色模式 1:呼吸模式 2:液体模式 3:单色流水 4:向下流水
+uint8_t current_led_mode = 0; // 与下拉框选项一一对应: 0:off 1:Breathing 2:Water Flow 3:Rainbow 4:Music Rhythm
 uint8_t ui_initialized = 0;
 
 // 当前选择的颜色
@@ -96,19 +96,19 @@ void apply_brightness_to_leds(void) {
             // 触发一次颜色更新（亮度会在 rgb_SetColor 中应用）
             {
                 static uint8_t breath_idx = 0;
-                RGBColor_TypeDef breath_colors[] = {RED, ORANGE, YELLOW, GREEN, SKY, BLUE, PURPLE};
+                RGBColor_TypeDef breath_colors[] = {WS_RED, WS_ORANGE, WS_YELLOW, WS_GREEN, WS_SKY, WS_BLUE, WS_PURPLE};
                 // 临时设置一个LED来触发亮度更新
                 rgb_SetColor(0, breath_colors[breath_idx]);
                 rgb_SendArray();
             }
             break;
             
-        case 2: // 流水模式
+        case 2: // Water Flow 流水模式
             // 触发一次渐变更新
             smooth_color_gradient(Pixel_S1_NUM, 100);
             break;
             
-        case 3: // 彩虹模式
+        case 3: // Rainbow 彩虹模式
             // 触发一次彩虹更新
             {
                 static int rainbow_offset = 0;
@@ -118,7 +118,7 @@ void apply_brightness_to_leds(void) {
                 rgb_SendArray();
             }
             break;
-			case 4: // 音乐节奏模式：用ADC采集的音量控制LED
+			case 4: // Music Rhythm 音乐节奏模式：用ADC采集的音量控制LED
             LM_to_WS(); // 复用adc.c中已有的音量-LED映射函数
             break;
     }
@@ -138,7 +138,7 @@ void ui_event_btnRed(lv_event_t * e)
     lv_event_code_t event_code = lv_event_get_code(e);
     lv_obj_t * target = lv_event_get_target(e);
     if(event_code == LV_EVENT_CLICKED) {
-        set_color_and_update(RED, "RED");
+        set_color_and_update(WS_RED, "RED");
     }
 }
 
@@ -147,7 +147,7 @@ void ui_event_btnOrange(lv_event_t * e)
     lv_event_code_t event_code = lv_event_get_code(e);
     lv_obj_t * target = lv_event_get_target(e);
     if(event_code == LV_EVENT_CLICKED) {
-        set_color_and_update(ORANGE, "ORANGE");
+        set_color_and_update(WS_ORANGE, "ORANGE");
     }
 }
 
@@ -156,7 +156,7 @@ void ui_event_btnYellow(lv_event_t * e)
     lv_event_code_t event_code = lv_event_get_code(e);
     lv_obj_t * target = lv_event_get_target(e);
     if(event_code == LV_EVENT_CLICKED) {
-        set_color_and_update(YELLOW, "YELLOW");
+        set_color_and_update(WS_YELLOW, "YELLOW");
     }
 }
 
@@ -165,7 +165,7 @@ void ui_event_btnGreen(lv_event_t * e)
     lv_event_code_t event_code = lv_event_get_code(e);
     lv_obj_t * target = lv_event_get_target(e);
     if(event_code == LV_EVENT_CLICKED) {
-        set_color_and_update(GREEN, "GREEN");
+        set_color_and_update(WS_GREEN, "GREEN");
     }
 }
 
@@ -174,7 +174,7 @@ void ui_event_btnPurple2(lv_event_t * e)
     lv_event_code_t event_code = lv_event_get_code(e);
     lv_obj_t * target = lv_event_get_target(e);
     if(event_code == LV_EVENT_CLICKED) {
-        set_color_and_update(PURPLE, "PURPLE");
+        set_color_and_update(WS_PURPLE, "PURPLE");
     }
 }
 
@@ -183,7 +183,7 @@ void ui_event_btnBlue(lv_event_t * e)
     lv_event_code_t event_code = lv_event_get_code(e);
     lv_obj_t * target = lv_event_get_target(e);
     if(event_code == LV_EVENT_CLICKED) {
-        set_color_and_update(BLUE, "BLUE");
+        set_color_and_update(WS_BLUE, "BLUE");
     }
 }
 
@@ -192,7 +192,7 @@ void ui_event_btnCyan(lv_event_t * e)
     lv_event_code_t event_code = lv_event_get_code(e);
     lv_obj_t * target = lv_event_get_target(e);
     if(event_code == LV_EVENT_CLICKED) {
-        set_color_and_update(SKY, "SKY");
+        set_color_and_update(WS_SKY, "SKY");
     }
 }
 
